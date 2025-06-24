@@ -32,20 +32,12 @@ Use it like this:
 
 .. code-block:: python
 
-    from sfinance.sfinance import StockDataFetcher
-
-    url = "https://www.screener.in/company/INFY/consolidated/"  # Full URL is required
-    fetcher = StockDataFetcher(url)
-
-    overview = fetcher.get_company_overview()
-    income = fetcher.get_income_statement()
-    balance = fetcher.get_balance_sheet()
-    cashflow = fetcher.get_cash_flow()
-    shareholding = fetcher.get_shareholding()
-
-    print(overview, income, balance, cashflow, shareholding)
-
-    fetcher.close()
+    from sfinance.sfinance import SFinance
+    sf = SFinance("https://www.screener.in/")
+    t = sf.ticker("INFY")
+    print(t.get_overview())
+    print(t.get_income_statement())
+    sf.close()
 
 This will return clean, structured pandas DataFrames from dynamically rendered pages. You are expected to supply valid URLs yourself. The package does not suggest or pre-configure any third-party endpoints.
 
