@@ -18,6 +18,54 @@ This tool is intended for personal and educational use only.
 * Free software: Apache Software License 2.0
 * Documentation: https://sfinance.readthedocs.io
 
+
+Usage
+-----
+
+Install the package (once published on PyPI):
+
+.. code-block:: shell
+
+    pip install sfinance
+
+Use it like this:
+
+.. code-block:: python
+
+    from sfinance.sfinance import StockDataFetcher
+
+    url = "https://www.screener.in/company/INFY/consolidated/"  # Full URL is required
+    fetcher = StockDataFetcher(url)
+
+    overview = fetcher.get_company_overview()
+    income = fetcher.get_income_statement()
+    balance = fetcher.get_balance_sheet()
+    cashflow = fetcher.get_cash_flow()
+    shareholding = fetcher.get_shareholding()
+
+    print(overview, income, balance, cashflow, shareholding)
+
+    fetcher.close()
+
+This will return clean, structured pandas DataFrames from dynamically rendered pages. You are expected to supply valid URLs yourself. The package does not suggest or pre-configure any third-party endpoints.
+
+---
+
+Legal Disclaimer
+----------------
+
+This project is an independent, educational, and non-commercial utility.
+
+- It is **not affiliated with, endorsed by, or sponsored by Screener.in, Mittal Analytics Private Limited, or any other third-party data provider**.
+- `sfinance` **does not provide, store, host, or distribute** any financial data.
+- It only reads **publicly accessible** web content **on-demand** using browser automation. No data is cached, saved, or redistributed.
+- All access is controlled by the user via input URLs. You are fully responsible for your use of this tool.
+- This library is intended for **personal, educational, and non-commercial** purposes only.
+
+Please respect the terms of service of any website you access. Use responsibly.
+
+
+
 Features
 --------
 

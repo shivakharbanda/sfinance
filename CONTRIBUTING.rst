@@ -113,7 +113,6 @@ Before you submit a pull request, check that it meets these guidelines:
    and make sure that the tests pass for all supported Python versions.
 4. Contributions must not include code that violates any website's terms of service. Please ensure that your feature, even if compatible with specific sites, does not directly reference or target them in ways that suggest affiliation or endorsement.
 
-
 Tips
 ----
 
