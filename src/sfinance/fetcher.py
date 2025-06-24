@@ -2,9 +2,13 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
 class BaseFetcher:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, chrome_binary_path):
         self.base_url = base_url.rstrip("/")
+
+        self.chrome_binary_path = chrome_binary_path
+
         self.driver = self._init_driver()
+
 
     def _init_driver(self):
         opts = Options()
@@ -17,6 +21,10 @@ class BaseFetcher:
         opts.add_argument("--disable-blink-features=AutomationControlled")
         opts.add_experimental_option("excludeSwitches", ["enable-automation"])
         opts.add_experimental_option("useAutomationExtension", False)
+
+        if self.chrome_binary_path:
+            opts.binary_location = self.chrome_binary_path
+            
         return webdriver.Chrome(options=opts)
 
     def get_driver(self):
