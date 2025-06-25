@@ -6,6 +6,8 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
+from sfinance.exceptions import TickerNotFound
+
 
 class Ticker:
     def __init__(self, symbol: str, fetcher, mode: str = "consolidated"):
@@ -28,6 +30,10 @@ class Ticker:
         self.driver.get(self.url)
         self.driver.implicitly_wait(5)
 
+        # Check for 404 condition
+        if "Error 404" in self.driver.page_source or "No CompanyCode matches the given query" in self.driver.page_source:
+            raise TickerNotFound(f"Ticker '{self.symbol}' not found at {self.url}")
+
         for selector in [
             "button[onclick^='Company.showSchedule']",
             "button[data-tab-id='quarterly-shp']",
@@ -44,6 +50,43 @@ class Ticker:
 
         time.sleep(1)
         return BeautifulSoup(self.driver.page_source, "html.parser")
+    
+    def get_peer_comparison(self):
+        try:
+            table = self.soup.select_one("#peers-table-placeholder table.data-table")
+            if not table:
+                raise ValueError("Peer comparison table not found.")
+
+            df = pd.read_html(io.StringIO(str(table)), flavor="bs4")[0]
+
+            # Ensure headers are correct
+            expected_cols = [
+                "S.No.", "Name", "CMP", "P/E", "Mar Cap", "Div Yld",
+                "NP Qtr", "Qtr Profit Var", "Sales Qtr", "Qtr Sales Var", "ROCE"
+            ]
+            df.columns = expected_cols[:len(df.columns)]  # truncate in case footer row is smaller
+
+            # Drop the Median row from <tfoot> if it exists
+            df = df[~df["S.No."].astype(str).str.contains("Median", na=False)]
+
+            # Clean up numeric fields
+            for col in df.columns[2:]:
+                df[col] = (
+                    df[col].astype(str)
+                        .str.replace(",", "", regex=False)
+                        .replace("-", None)
+                        .astype(float)
+                )
+
+            # Strip any whitespace in "Name"
+            df["Name"] = df["Name"].astype(str).str.strip()
+
+            return df.reset_index(drop=True)
+
+        except Exception as e:
+            print(f"Error extracting peer comparison: {e}")
+            return pd.DataFrame()
+
 
     def _extract_table(self, section_id: str):
         try:
