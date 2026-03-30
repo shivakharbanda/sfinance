@@ -1,15 +1,32 @@
 import io
+import os
+import re
 import time
+import urllib.request
+from urllib.parse import quote, urlparse, urlunparse
 import pandas as pd
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-from sfinance.exceptions import TickerNotFound
+from sfinance.exceptions import TickerNotFound, LoginRequiredError
 
 
 class Ticker:
+    _DOWNLOAD_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/pdf,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/",
+    }
+
     def __init__(self, symbol: str, fetcher, mode: str = "consolidated"):
         self.symbol = symbol.upper()
         self.fetcher = fetcher
@@ -24,6 +41,7 @@ class Ticker:
 
         self.url = self.fetcher.build_url(self.relative_path)
         self.soup = self._load_and_parse()
+        self._documents_loaded = False
 
 
     def _load_and_parse(self):
@@ -50,7 +68,21 @@ class Ticker:
 
         time.sleep(1)
         return BeautifulSoup(self.driver.page_source, "html.parser")
-    
+
+    def _ensure_documents_loaded(self):
+        if self._documents_loaded:
+            return
+        try:
+            for btn in self.driver.find_elements(By.CSS_SELECTOR, "#documents button.show-more-button"):
+                if btn.is_displayed():
+                    btn.click()
+                    time.sleep(0.3)
+            time.sleep(1)
+            self.soup = BeautifulSoup(self.driver.page_source, "html.parser")
+            self._documents_loaded = True
+        except Exception as e:
+            print(f"Error loading documents section: {e}")
+
     def get_peer_comparison(self):
         try:
             table = self.soup.select_one("#peers-table-placeholder table.data-table")
@@ -172,6 +204,255 @@ class Ticker:
         except Exception as e:
             print(f"Error extracting overview: {e}")
             return {}
+
+    def get_announcements(self, tab: str = "recent") -> pd.DataFrame:
+        if not self.fetcher.is_logged_in():
+            raise LoginRequiredError("Login required to access announcements.")
+        if tab not in {"recent", "important"}:
+            raise ValueError("tab must be 'recent' or 'important'")
+        try:
+            self._ensure_documents_loaded()
+            if tab == "recent":
+                soup = self.soup
+            else:
+                btn = self.driver.find_element(
+                    By.CSS_SELECTOR, "button[onclick*='announcements/important']"
+                )
+                btn.click()
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located(
+                        (By.CSS_SELECTOR, "#company-announcements-tab ul li")
+                    )
+                )
+                time.sleep(0.5)
+                soup = BeautifulSoup(self.driver.page_source, "html.parser")
+
+            container = soup.select_one("#company-announcements-tab ul.list-links")
+            if not container:
+                return pd.DataFrame()
+
+            rows = []
+            for li in container.find_all("li", recursive=False):
+                a = li.find("a")
+                if not a:
+                    continue
+                href = a.get("href", "").strip() or None
+                subtitle_div = a.find("div")
+                subtitle = subtitle_div.get_text(strip=True) if subtitle_div else None
+                title = a.get_text(separator=" ", strip=True)
+                if subtitle:
+                    title = title.replace(subtitle, "").strip()
+                rows.append({"title": title, "subtitle": subtitle, "url": href})
+
+            return pd.DataFrame(rows, columns=["title", "subtitle", "url"])
+        except Exception as e:
+            print(f"Error extracting announcements: {e}")
+            return pd.DataFrame()
+
+    def get_annual_reports(self) -> pd.DataFrame:
+        if not self.fetcher.is_logged_in():
+            raise LoginRequiredError("Login required to access annual reports.")
+        try:
+            self._ensure_documents_loaded()
+            container = self.soup.select_one("div.annual-reports ul.list-links")
+            if not container:
+                return pd.DataFrame()
+
+            rows = []
+            for li in container.find_all("li", recursive=False):
+                a = li.find("a")
+                if not a:
+                    continue
+                href = a.get("href", "").strip() or None
+                subtitle_div = a.find("div")
+                source = subtitle_div.get_text(strip=True) if subtitle_div else None
+                title = a.get_text(separator=" ", strip=True)
+                if source:
+                    title = title.replace(source, "").strip()
+                rows.append({"title": title, "source": source, "url": href})
+
+            return pd.DataFrame(rows, columns=["title", "source", "url"])
+        except Exception as e:
+            print(f"Error extracting annual reports: {e}")
+            return pd.DataFrame()
+
+    def get_credit_ratings(self) -> pd.DataFrame:
+        if not self.fetcher.is_logged_in():
+            raise LoginRequiredError("Login required to access credit ratings.")
+        try:
+            self._ensure_documents_loaded()
+            container = self.soup.select_one("div.credit-ratings ul.list-links")
+            if not container:
+                return pd.DataFrame()
+
+            rows = []
+            for li in container.find_all("li", recursive=False):
+                a = li.find("a")
+                if not a:
+                    continue
+                href = a.get("href", "").strip() or None
+                subtitle_div = a.find("div")
+                subtitle = subtitle_div.get_text(strip=True) if subtitle_div else None
+                title = a.get_text(separator=" ", strip=True)
+                if subtitle:
+                    title = title.replace(subtitle, "").strip()
+                rows.append({"title": title, "subtitle": subtitle, "url": href})
+
+            return pd.DataFrame(rows, columns=["title", "subtitle", "url"])
+        except Exception as e:
+            print(f"Error extracting credit ratings: {e}")
+            return pd.DataFrame()
+
+    def get_concalls(self) -> pd.DataFrame:
+        if not self.fetcher.is_logged_in():
+            raise LoginRequiredError("Login required to access concalls.")
+        try:
+            self._ensure_documents_loaded()
+            container = self.soup.select_one("div.concalls ul.list-links")
+            if not container:
+                return pd.DataFrame()
+
+            rows = []
+            for li in container.find_all("li", recursive=False):
+                period_div = li.select_one("div.font-weight-500.font-size-15")
+                period = period_div.get_text(strip=True) if period_div else None
+
+                links = {}
+                for a in li.find_all("a", class_="concall-link"):
+                    text = a.get_text(strip=True).lower()
+                    href = a.get("href", "").strip() or None
+                    if text in ("transcript", "ppt", "rec"):
+                        links[text] = href
+
+                rows.append({
+                    "period": period,
+                    "transcript_url": links.get("transcript"),
+                    "ppt_url": links.get("ppt"),
+                    "rec_url": links.get("rec"),
+                })
+
+            df = pd.DataFrame(rows, columns=["period", "transcript_url", "ppt_url", "rec_url"])
+            for col in ["transcript_url", "ppt_url", "rec_url"]:
+                df[col] = [v if isinstance(v, str) else None for v in df[col]]
+            return df
+        except Exception as e:
+            print(f"Error extracting concalls: {e}")
+            return pd.DataFrame()
+
+    def _encode_url(self, url: str) -> str:
+        p = urlparse(url)
+        return urlunparse(p._replace(path=quote(p.path, safe="/")))
+
+    def _make_headers(self, url: str) -> dict:
+        p = urlparse(url)
+        referer = f"{p.scheme}://{p.netloc}/"
+        return {**self._DOWNLOAD_HEADERS, "Referer": referer}
+
+    def download(self, url: str, folder_path: str, filename: str = None) -> str:
+        if not self.fetcher.is_logged_in():
+            raise LoginRequiredError("Login required to download documents.")
+        if not url:
+            raise ValueError("url cannot be empty")
+        os.makedirs(folder_path, exist_ok=True)
+        if not filename:
+            filename = url.split("?")[0].rstrip("/").split("/")[-1] or "document"
+        dest = os.path.join(folder_path, filename)
+        encoded = self._encode_url(url)
+        req = urllib.request.Request(encoded, headers=self._make_headers(url))
+        with urllib.request.urlopen(req, timeout=30) as response:
+            with open(dest, "wb") as f:
+                f.write(response.read())
+        return dest
+
+    def download_documents(self, doc_type: str, folder_path: str, link_type: str = "all",
+                           tab: str = "recent", year=None, period=None, n: int = None) -> list:
+        valid_doc_types = {"announcements", "annual_reports", "credit_ratings", "concalls"}
+        valid_link_types = {"transcript", "ppt", "rec", "all"}
+        if doc_type not in valid_doc_types:
+            raise ValueError(f"doc_type must be one of {valid_doc_types}")
+        if link_type not in valid_link_types:
+            raise ValueError(f"link_type must be one of {valid_link_types}")
+
+        os.makedirs(folder_path, exist_ok=True)
+
+        def sanitize(text: str) -> str:
+            return re.sub(r"[^\w\s-]", "", text).strip().replace(" ", "_")
+
+        pairs = []
+
+        if doc_type == "announcements":
+            df = self.get_announcements(tab=tab)
+            if n is not None:
+                df = df.head(n)
+            for i, row in df.iterrows():
+                if not row["url"]:
+                    continue
+                name = sanitize(row["title"] or "")[:40]
+                pairs.append((row["url"], f"announcement_{i + 1}_{name}.pdf"))
+
+        elif doc_type == "annual_reports":
+            df = self.get_annual_reports()
+            if year is not None:
+                years = [year] if isinstance(year, int) else list(year)
+                df = df[df["title"].str.extract(r"(\d{4})")[0].astype(float).isin(years)]
+            if n is not None:
+                df = df.head(n)
+            for i, row in df.iterrows():
+                if not row["url"]:
+                    continue
+                year_match = re.search(r"\d{4}", row["title"] or "")
+                yr = year_match.group() if year_match else str(i + 1)
+                source = sanitize(row["source"] or "")
+                filename = f"annual_report_{yr}_{source}.pdf" if source else f"annual_report_{yr}.pdf"
+                pairs.append((row["url"], filename))
+
+        elif doc_type == "credit_ratings":
+            df = self.get_credit_ratings()
+            if n is not None:
+                df = df.head(n)
+            for i, row in df.iterrows():
+                if not row["url"]:
+                    continue
+                path_no_query = row["url"].split("?")[0].rstrip("/")
+                ext = os.path.splitext(path_no_query)[1] or ".pdf"
+                subtitle = row.get("subtitle") or ""
+                date_match = re.search(r"\d{1,2}\s+\w+\s+\d{4}", subtitle)
+                date_str = sanitize(date_match.group()) if date_match else str(i + 1)
+                pairs.append((row["url"], f"credit_rating_{i + 1}_{date_str}{ext}"))
+
+        elif doc_type == "concalls":
+            df = self.get_concalls()
+            if period is not None:
+                periods = [period] if isinstance(period, str) else list(period)
+                periods_lower = [p.lower() for p in periods]
+                df = df[df["period"].str.lower().isin(periods_lower)]
+            if n is not None:
+                df = df.head(n)
+            col_map = {"transcript": "transcript_url", "ppt": "ppt_url", "rec": "rec_url"}
+            types_to_fetch = list(col_map.keys()) if link_type == "all" else [link_type]
+            for _, row in df.iterrows():
+                p = sanitize(row["period"] or "unknown")
+                for lt in types_to_fetch:
+                    url = row.get(col_map[lt])
+                    if not isinstance(url, str) or not url:
+                        continue
+                    if "youtube.com" in url or "youtu.be" in url:
+                        continue
+                    pairs.append((url, f"concall_{p}_{lt}.pdf"))
+
+        downloaded = []
+        for url, filename in pairs:
+            dest = os.path.join(folder_path, filename)
+            try:
+                req = urllib.request.Request(self._encode_url(url), headers=self._make_headers(url))
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    with open(dest, "wb") as f:
+                        f.write(response.read())
+                downloaded.append(dest)
+            except Exception as e:
+                print(f"Failed to download {url}: {e}")
+
+        return downloaded
 
     def close(self):
         self.driver.quit()

@@ -64,6 +64,9 @@ Features
 * Uses Selenium to render dynamic content
 * Parses financial tables with BeautifulSoup
 * Extracts income statement, balance sheet, cash flow, shareholding, and company overview
+* Accesses company documents: announcements, annual reports, credit ratings, and concalls
+* Downloads documents (PDFs, HTML) directly to a local folder with flexible filters
+* Stock screener with custom financial queries (login required)
 * Outputs pandas DataFrames for analysis
 
 Credits
