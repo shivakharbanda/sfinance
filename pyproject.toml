@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sfinance"
-version = "0.2.0"
+version = "0.2.1"
 description = "it is a lightweight Python library for extracting financial data from structured, publicly accessible stock information pages"
 readme = "README.rst"
 authors = [
@@ -21,6 +21,8 @@ dependencies = [
     "selenium>=4.33.0",
     "beautifulsoup4>=4.13.4",
     "pandas>=2.0.0",
+    "requests>=2.33.1",
+    "lxml>=6.0.2",
     "html5lib"
 ]
 

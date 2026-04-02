@@ -5,6 +5,7 @@ import time
 import urllib.request
 from urllib.parse import quote, urlparse, urlunparse
 import pandas as pd
+import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -31,20 +32,31 @@ class Ticker:
         self.symbol = symbol.upper()
         self.fetcher = fetcher
         self.driver = self.fetcher.get_driver()
-        
+
         if mode not in {"consolidated", "standalone"}:
             raise ValueError("mode must be 'consolidated' or 'standalone'")
         self.mode = mode
 
         suffix = "/consolidated/" if self.mode == "consolidated" else "/"
         self.relative_path = f"company/{self.symbol}{suffix}"
-
         self.url = self.fetcher.build_url(self.relative_path)
+
+        # Open a dedicated tab — shares the login session (same browser),
+        # but isolates page state so tickers don't overwrite each other's soup.
+        self.driver.execute_script("window.open('about:blank', '_blank');")
+        self.window_handle = self.driver.window_handles[-1]
+        self.driver.switch_to.window(self.window_handle)
+
         self.soup = self._load_and_parse()
         self._documents_loaded = False
 
+    def _activate(self):
+        """Switch the shared driver focus to this ticker's tab."""
+        if self.driver.current_window_handle != self.window_handle:
+            self.driver.switch_to.window(self.window_handle)
 
     def _load_and_parse(self):
+        self._activate()
         self.driver.get(self.url)
         self.driver.implicitly_wait(5)
 
@@ -72,6 +84,7 @@ class Ticker:
     def _ensure_documents_loaded(self):
         if self._documents_loaded:
             return
+        self._activate()
         try:
             for btn in self.driver.find_elements(By.CSS_SELECTOR, "#documents button.show-more-button"):
                 if btn.is_displayed():
@@ -84,39 +97,40 @@ class Ticker:
             print(f"Error loading documents section: {e}")
 
     def get_peer_comparison(self):
+        self._activate()
         try:
-            table = self.soup.select_one("#peers-table-placeholder table.data-table")
-            if not table:
-                raise ValueError("Peer comparison table not found.")
+            # warehouse_id is already in the loaded soup — no JS wait needed
+            info = self.soup.find("div", id="company-info")
+            if not info:
+                print(f"No company-info div found for {self.symbol}")
+                return pd.DataFrame()
 
-            df = pd.read_html(io.StringIO(str(table)), flavor="bs4")[0]
+            warehouse_id = info.get("data-warehouse-id")
+            if not warehouse_id:
+                print(f"No warehouse_id found for {self.symbol}")
+                return pd.DataFrame()
 
-            # Ensure headers are correct
-            expected_cols = [
-                "S.No.", "Name", "CMP", "P/E", "Mar Cap", "Div Yld",
-                "NP Qtr", "Qtr Profit Var", "Sales Qtr", "Qtr Sales Var", "ROCE"
-            ]
-            df.columns = expected_cols[:len(df.columns)]  # truncate in case footer row is smaller
+            # Hit the API directly using Selenium's authenticated session cookies
+            api_url = f"https://www.screener.in/api/company/{warehouse_id}/peers/"
+            cookies = {c["name"]: c["value"] for c in self.driver.get_cookies()}
+            headers = {
+                "Referer": self.url,
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "text/html, */*",
+            }
 
-            # Drop the Median row from <tfoot> if it exists
-            df = df[~df["S.No."].astype(str).str.contains("Median", na=False)]
+            resp = requests.get(api_url, cookies=cookies, headers=headers, timeout=15)
+            resp.raise_for_status()
 
-            # Clean up numeric fields
-            for col in df.columns[2:]:
-                df[col] = (
-                    df[col].astype(str)
-                        .str.replace(",", "", regex=False)
-                        .replace("-", None)
-                        .astype(float)
-                )
-
-            # Strip any whitespace in "Name"
-            df["Name"] = df["Name"].astype(str).str.strip()
-
-            return df.reset_index(drop=True)
+            # pd.read_html handles column names, dtypes, and numeric parsing automatically.
+            # Median row (S.No. = NaN) is kept — it's useful context.
+            tables = pd.read_html(io.StringIO(resp.text))
+            if not tables:
+                return pd.DataFrame()
+            return tables[0].reset_index(drop=True)
 
         except Exception as e:
-            print(f"Error extracting peer comparison: {e}")
+            print(f"Error fetching peer comparison for {self.symbol}: {e}")
             return pd.DataFrame()
 
 
@@ -210,6 +224,7 @@ class Ticker:
             raise LoginRequiredError("Login required to access announcements.")
         if tab not in {"recent", "important"}:
             raise ValueError("tab must be 'recent' or 'important'")
+        self._activate()
         try:
             self._ensure_documents_loaded()
             if tab == "recent":
@@ -455,4 +470,8 @@ class Ticker:
         return downloaded
 
     def close(self):
-        self.driver.quit()
+        try:
+            self._activate()
+            self.driver.close()  # closes just this tab; BaseFetcher.close() quits the browser
+        except Exception:
+            pass
